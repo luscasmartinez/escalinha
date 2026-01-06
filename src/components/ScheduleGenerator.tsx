@@ -39,15 +39,46 @@ export function ScheduleGenerator({ onSuccess }: ScheduleGeneratorProps) {
 
       const firstDay = new Date(year, monthNum - 1, 1);
       const lastDay = new Date(year, monthNum, 0);
+      const daysInMonth = lastDay.getDate();
+      
+      // Validar datas
+      if (isNaN(firstDay.getTime()) || isNaN(lastDay.getTime()) || daysInMonth === 0) {
+        setError('Data inválida. Verifique o mês selecionado.');
+        setIsGenerating(false);
+        return;
+      }
+      
+      console.log(`Gerando escalas para ${month}: ${daysInMonth} dias`);
 
       await scheduleService.deleteByDateRange(
         firstDay.toISOString().split('T')[0],
         lastDay.toISOString().split('T')[0]
       );
 
-      // Carregar férias do período
+      // Carregar escala do último dia do mês anterior para evitar dias consecutivos entre meses
+      const previousMonthLastDay = new Date(year, monthNum - 1, 0);
+      const previousMonthSchedules = await scheduleService.getByDateRange(
+        previousMonthLastDay.toISOString().split('T')[0],
+        previousMonthLastDay.toISOString().split('T')[0]
+      );
+
+      // Inicializar com quem foi escalado no último dia do mês anterior
+      let previousExternalIds: string[] = [];
+      let previousInternalId: string | null = null;
+      if (previousMonthSchedules.length > 0) {
+        const lastSchedule = previousMonthSchedules[0];
+        previousExternalIds = [
+          lastSchedule.external_employee1_id || '',
+          lastSchedule.external_employee2_id || ''
+        ].filter(id => id !== '');
+        previousInternalId = lastSchedule.internal_employee_id || null;
+      }
+
+      // Carregar férias do período (incluindo alguns dias antes para garantir)
+      const vacationStartDate = new Date(firstDay);
+      vacationStartDate.setDate(vacationStartDate.getDate() - 1); // Incluir dia anterior
       const vacations = await vacationService.getByDateRange(
-        firstDay.toISOString().split('T')[0],
+        vacationStartDate.toISOString().split('T')[0],
         lastDay.toISOString().split('T')[0]
       );
 
@@ -71,12 +102,8 @@ export function ScheduleGenerator({ onSuccess }: ScheduleGeneratorProps) {
       const schedules = [];
       let externalIndex = 0;
       let internalIndex = 0;
-      
-      // Rastrear quem foi escalado no dia anterior para evitar dias consecutivos
-      let previousExternalIds: string[] = [];
-      let previousInternalId: string | null = null;
 
-      for (let day = 1; day <= lastDay.getDate(); day++) {
+      for (let day = 1; day <= daysInMonth; day++) {
         const date = new Date(year, monthNum - 1, day);
         const dayOfWeek = date.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -87,19 +114,12 @@ export function ScheduleGenerator({ onSuccess }: ScheduleGeneratorProps) {
           const isOnVacation = vacationMap.get(emp.id)?.has(dateStr) || false;
           return !previousExternalIds.includes(emp.id) && !isOnVacation;
         });
-        const availableInternals = internalEmployees.filter(emp => {
-          const isOnVacation = vacationMap.get(emp.id)?.has(dateStr) || false;
-          return emp.id !== previousInternalId && !isOnVacation;
-        });
 
         // Se não houver colaboradores disponíveis suficientes, usar todos
         // (caso especial quando há poucos colaboradores)
         const externalsToUse = availableExternals.length >= 2 
           ? availableExternals 
           : externalEmployees;
-        const internalsToUse = availableInternals.length >= 1 
-          ? availableInternals 
-          : internalEmployees;
 
         // Selecionar colaboradores evitando repetição entre os dois externos
         let external1: typeof externalEmployees[0];
@@ -127,8 +147,31 @@ export function ScheduleGenerator({ onSuccess }: ScheduleGeneratorProps) {
         selectedExternalIds.push(external2.id);
         externalIndex++;
 
-        const internal = internalsToUse[internalIndex % internalsToUse.length];
-        internalIndex++;
+        // Selecionar interno garantindo rotação justa, evitando férias e o dia anterior
+        let internal: typeof internalEmployees[0] | null = null;
+        let internalAttempts = 0;
+        let candidateInternalIndex = internalIndex;
+
+        while (internalAttempts < internalEmployees.length) {
+          const candidate = internalEmployees[candidateInternalIndex % internalEmployees.length];
+          const isOnVacationInternal = vacationMap.get(candidate.id)?.has(dateStr) || false;
+
+          if (!isOnVacationInternal && candidate.id !== previousInternalId) {
+            internal = candidate;
+            // Avança o índice global para o próximo após o escolhido
+            internalIndex = candidateInternalIndex + 1;
+            break;
+          }
+
+          candidateInternalIndex++;
+          internalAttempts++;
+        }
+
+        // Fallback: se por algum motivo não encontrar (todos de férias, etc), usa o próximo da lista
+        if (!internal) {
+          internal = internalEmployees[internalIndex % internalEmployees.length];
+          internalIndex++;
+        }
 
         schedules.push({
           schedule_date: date.toISOString().split('T')[0],
@@ -143,11 +186,20 @@ export function ScheduleGenerator({ onSuccess }: ScheduleGeneratorProps) {
         previousInternalId = internal.id;
       }
 
+      if (schedules.length === 0) {
+        setError('Nenhuma escala foi gerada. Verifique se há colaboradores cadastrados.');
+        setIsGenerating(false);
+        return;
+      }
+
+      console.log(`Gerando ${schedules.length} escalas para ${month}`);
       await scheduleService.createMany(schedules);
+      console.log('Escalas geradas com sucesso!');
       onSuccess();
-    } catch (err) {
-      setError('Erro ao gerar escalas');
-      console.error(err);
+    } catch (err: any) {
+      const errorMessage = err?.message || 'Erro desconhecido ao gerar escalas';
+      setError(`Erro ao gerar escalas: ${errorMessage}`);
+      console.error('Erro detalhado:', err);
     } finally {
       setIsGenerating(false);
     }
@@ -188,7 +240,7 @@ export function ScheduleGenerator({ onSuccess }: ScheduleGeneratorProps) {
             <li>Dias úteis e finais de semana recebem escalas independentes</li>
             <li>Cada escala terá 2 externos e 1 interno</li>
             <li>A distribuição é feita de forma rotativa entre os colaboradores ativos</li>
-            <li>Nenhum colaborador será escalado em dias consecutivos</li>
+            <li>Nenhum colaborador será escalado em dias consecutivos (incluindo entre meses)</li>
             <li>Colaboradores em férias não serão escalados</li>
             <li>Escalas existentes do mês serão substituídas</li>
           </ul>

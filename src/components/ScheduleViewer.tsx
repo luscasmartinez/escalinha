@@ -133,6 +133,31 @@ export function ScheduleViewer({ refreshTrigger }: ScheduleViewerProps) {
     }
   };
 
+  const handleDeleteMonth = async () => {
+    const monthName = new Date(month.year, month.month - 1).toLocaleDateString('pt-BR', {
+      month: 'long',
+      year: 'numeric'
+    });
+    
+    if (!confirm(`Tem certeza que deseja excluir TODAS as escalas de ${monthName}?\n\nEsta ação não pode ser desfeita.`)) {
+      return;
+    }
+
+    try {
+      const firstDay = new Date(month.year, month.month - 1, 1);
+      const lastDay = new Date(month.year, month.month, 0);
+      
+      await scheduleService.deleteByDateRange(
+        firstDay.toISOString().split('T')[0],
+        lastDay.toISOString().split('T')[0]
+      );
+      loadSchedules();
+    } catch (error) {
+      console.error('Erro ao excluir escalas do mês:', error);
+      alert('Erro ao excluir escalas do mês');
+    }
+  };
+
   const generatePDF = async () => {
     try {
       const { jsPDF } = await import('jspdf');
@@ -301,17 +326,33 @@ export function ScheduleViewer({ refreshTrigger }: ScheduleViewerProps) {
               }`}
             >
               <div className="flex items-center justify-between mb-1">
-                <div className={`text-sm font-bold ${isWeekend ? 'text-blue-900' : 'text-gray-900'}`}>
-                  {day}
+                <div className="flex items-center gap-1">
+                  <div className={`text-sm font-bold ${isWeekend ? 'text-blue-900' : 'text-gray-900'}`}>
+                    {day}
+                  </div>
+                  {schedule?.manual_edit && (
+                    <span className="text-[8px] bg-yellow-100 text-yellow-800 rounded px-0.5 font-semibold" title={`Editado por ${schedule.last_edited_by || 'N/A'}${schedule.last_edited_at ? ` em ${new Date(schedule.last_edited_at).toLocaleDateString('pt-BR')}` : ''}`}>
+                      ✏️
+                    </span>
+                  )}
                 </div>
                 {schedule && !isEditing && (
-                  <button
-                    onClick={() => startEdit(schedule)}
-                    className="p-0.5 hover:bg-gray-200 rounded opacity-60 hover:opacity-100 transition-opacity"
-                    title="Editar escala"
-                  >
-                    <Edit2 size={10} className="text-gray-600" />
-                  </button>
+                  <div className="flex gap-0.5">
+                    <button
+                      onClick={() => handleDelete(schedule.id, schedule.schedule_date)}
+                      className="p-0.5 hover:bg-red-50 rounded opacity-60 hover:opacity-100 transition-opacity"
+                      title="Excluir escala"
+                    >
+                      <Trash2 size={9} className="text-red-600" />
+                    </button>
+                    <button
+                      onClick={() => startEdit(schedule)}
+                      className="p-0.5 hover:bg-gray-200 rounded opacity-60 hover:opacity-100 transition-opacity"
+                      title="Editar escala"
+                    >
+                      <Edit2 size={9} className="text-gray-600" />
+                    </button>
+                  </div>
                 )}
               </div>
               <div className="flex-1 overflow-hidden">
@@ -367,6 +408,13 @@ export function ScheduleViewer({ refreshTrigger }: ScheduleViewerProps) {
                     </div>
                   ) : (
                     <div className="space-y-0.5 text-xs">
+                      {schedule.manual_edit && (
+                        <div className="mb-1">
+                          <span className="inline-block px-1 py-0.5 bg-yellow-100 text-yellow-800 rounded text-[10px] font-semibold" title={`Editado por ${schedule.last_edited_by || 'N/A'}${schedule.last_edited_at ? ` em ${new Date(schedule.last_edited_at).toLocaleDateString('pt-BR')}` : ''}`}>
+                            ✏️ Editado
+                          </span>
+                        </div>
+                      )}
                       <div className="text-gray-700 truncate" title={schedule.external_employee1?.name}>
                         <span className="text-gray-500">E1:</span> {schedule.external_employee1?.name || '-'}
                       </div>
@@ -376,6 +424,11 @@ export function ScheduleViewer({ refreshTrigger }: ScheduleViewerProps) {
                       <div className="text-gray-700 truncate" title={schedule.internal_employee?.name}>
                         <span className="text-gray-500">I:</span> {schedule.internal_employee?.name || '-'}
                       </div>
+                      {schedule.manual_edit && schedule.last_edited_by && (
+                        <div className="text-[10px] text-gray-500 italic truncate" title={`Editado por ${schedule.last_edited_by}${schedule.last_edited_at ? ` em ${new Date(schedule.last_edited_at).toLocaleDateString('pt-BR')}` : ''}`}>
+                          Por: {schedule.last_edited_by}
+                        </div>
+                      )}
                     </div>
                   )
                 ) : (
@@ -453,6 +506,16 @@ export function ScheduleViewer({ refreshTrigger }: ScheduleViewerProps) {
               <Download size={18} />
               <span className="hidden sm:inline">PDF</span>
             </button>
+            {schedules.length > 0 && (
+              <button
+                onClick={handleDeleteMonth}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                title="Excluir todas as escalas do mês"
+              >
+                <Trash2 size={18} />
+                <span className="hidden sm:inline">Excluir Mês</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
